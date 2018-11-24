@@ -1,0 +1,2 @@
+java -jar ../../../../tools/JFlex.jar Lexer.flex
+java -jar ../../../../tools/java-cup-11b.jar -parser Parser -symbols Sym Parser.cup
