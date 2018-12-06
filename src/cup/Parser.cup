@@ -1,14 +1,84 @@
 package com.ufcg.compiladores;
 
 import java_cup.runtime.*;
-
+import com.ufcg.compiladores.symbols.Symbol;
+import com.ufcg.compiladores.symbols.SymbolTable;
+import com.ufcg.compiladores.type.LiteralType;
+import com.ufcg.compiladores.type.FunctionType;
+import com.ufcg.compiladores.type.ProcedureType;
+import com.ufcg.compiladores.type.Values;
+import java.util.*;
 
 parser code {:
+
+	//private SymbolTable st = new SymbolTable();
+
+	public LiteralType sintArType(Object type1, Object type2) {
+		LiteralType s1 = (LiteralType)type1;
+		LiteralType s2 = (LiteralType)type2;
+
+		if (s1.getName().equals(s2.getName())) {
+			return s1;
+		}
+		// add this error to error counter and add line
+		System.err.println("Syntax Error: expected type does not match.");
+		Main.errors.increase();
+		return s1;
+	}
+
+	public void sem_error(String lexeme, String message) {
+		System.err.println("Error in line "+ Main.lexer.current_line() + " : Semantic error");
+      	System.err.println("==> " + message + ": "+ lexeme + "\n");
+		Main.errors.increase();
+  	}
+  	
+  	public void sem_error(String message) {
+		System.err.println("Error "+ Main.lexer.current_lexeme() + " : Semantic error");
+      	System.err.println("==> " + message +"\n");
+		Main.errors.increase();
+  	}
+
+
+	public void checkTypesAttr(Object id, Object type) {
+		if (type != null) {
+			String idAux = (String)id;
+			LiteralType t = (LiteralType)type;
+
+			LiteralType idType = SymbolTable.getSymbol(idAux);
+
+			if (idType == null) {
+				sem_error(idAux, "Identifier not found");
+				Main.errors.increase();
+			}
+			else if (!idType.getName().equals(t.getName())) {
+				sem_error("Incompatible types");
+				Main.errors.increase();
+			}
+		}
+	}
+
+	public void mapTypes(Object il, Object id, Object t) {
+		List<String> idList = ((ArrayList<String>)il);
+
+		if (id != null) {
+			idList.add((String)id);
+		}
+
+		for (String curr_id : idList) {
+			if (!SymbolTable.addSymbol((String)curr_id, (LiteralType)t)) {
+				sem_error((String)curr_id, "duplicate name");
+			}
+		}
+	}
+
 :};
 
+init with {:
+	SymbolTable.start();
+:};
 
-terminal PROGRAM, BEGIN, END, VARIABLE, FUNCTION, PROCEDURE, FOR;
-terminal TO, DO;
+terminal PROGRAM, BEGIN, END, VAR, FUNCTION, PROCEDURE;
+terminal FOR, TO, DO, INT_TYPE, BOOLEAN_TYPE, STR_TYPE;
 terminal EQ, OR, AND, NOT, ADD, SUB, MUL, DIV, MOD, ASSIGN;
 terminal BOOLEAN, INTEGER, STRING, ARRAY, OF, RANGE;
 terminal LEFT_PARENTHESIS, RIGHT_PARENTHESIS, LEFT_BRACKET, RIGHT_BRACKET;
@@ -17,134 +87,213 @@ terminal IDENTIFIER;
 
 non terminal root, program, body;
 non terminal declarations, declaration, statements, statement;
-non terminal variables, variable, type, index, identifiers, literal, opt_init;
+non terminal variables, variable, type, type_id, subscript, identifiers, literal, opt_init;
 non terminal function, procedure, opt_params, params, param;
 non terminal for, attribuition, array, call, opt_arguments, arguments;
 non terminal expressions, expression, exp0, exp1, exp2, exp3, exp4;
 
 start with root;
 
-root ::= program declarations body DOT;
-program ::= PROGRAM IDENTIFIER SEMICOLON;
-body ::= BEGIN statements END;
+root			::= program declarations body DOT;
+program			::= PROGRAM IDENTIFIER SEMICOLON;
+body			::= BEGIN statements END; 
 
-declarations ::= declarations declaration
-	| /* empty */
-	;
+declarations	::= declarations declaration
+				|	/* empty */;
 
-declaration ::= VARIABLE variables
-	| function
-	| procedure
-	;
+declaration		::= VAR variables
+				|	function SEMICOLON 	{: SymbolTable.pop(); :}
+				|	procedure SEMICOLON {: SymbolTable.pop(); :};
 
-variables ::= variables variable 
-	| variable
-	;
+variables		::= variables variable SEMICOLON
+				|	variable SEMICOLON;
 
-variable ::= IDENTIFIER COMMA identifiers COLON type SEMICOLON
-	| IDENTIFIER COLON type opt_init SEMICOLON;
+variable		::= IDENTIFIER:id COMMA identifiers:il COLON type:t {:  mapTypes(il, id, t); :}
+				|	IDENTIFIER:id COLON type:t opt_init {: 	if (!SymbolTable.addSymbol((String)id, (LiteralType)t)) {
+																parser.sem_error((String)id, "duplicate name");
+															} 
+														:};
 
-type ::= IDENTIFIER
-	| ARRAY OF type
-	| ARRAY LEFT_BRACKET index RIGHT_BRACKET OF type
-	;
+type			::= type_id:t {: RESULT = t; :}
+				|	ARRAY OF type
+				|	ARRAY LEFT_BRACKET subscript RIGHT_BRACKET OF type;
 
-index ::= IDENTIFIER
-	| expression RANGE expression // expressões devem ser constantes
-	;
+type_id			::= INT_TYPE 	{: RESULT = new LiteralType("integer"); :}
+				| BOOLEAN_TYPE	{: RESULT = new LiteralType("boolean"); :}
+				| STR_TYPE		{: RESULT = new LiteralType("string");  :};	
 
-opt_init ::= EQ expression // expressões devem ser constantes
-	| /* empty */
-	;
+subscript		::= IDENTIFIER
+				|	expression RANGE expression; // expressões devem ser constantes
 
-procedure ::= PROCEDURE IDENTIFIER opt_params SEMICOLON declarations BEGIN statements END SEMICOLON;
+opt_init		::= EQ expression // expressões devem ser constantes
+				|	/* empty */;
 
-function ::= FUNCTION IDENTIFIER opt_params COLON IDENTIFIER SEMICOLON declarations BEGIN statements END SEMICOLON;
+procedure		::= PROCEDURE IDENTIFIER:id opt_params:paramsList {: 
+							String procedureId = (String)id;
+							
+							if (!SymbolTable.addSymbol(procedureId, new ProcedureType())) {
+								parser.sem_error(procedureId, "duplicate name");
+							} else {
+								if (paramsList != null) {
+									ProcedureType type = (ProcedureType)SymbolTable.getSymbol(procedureId);
+									type.addParams((ArrayList<LiteralType>) paramsList);
+								}
+								SymbolTable.push();
+							}
+					:} SEMICOLON declarations BEGIN statements END;
 
-opt_params ::= LEFT_PARENTHESIS params RIGHT_PARENTHESIS
-	| LEFT_PARENTHESIS RIGHT_PARENTHESIS
-	| /* empty */
-	;
+function		::= FUNCTION IDENTIFIER:id opt_params:paramsList COLON type:t {: 
+							String functionId = (String)id;
+							
+							if (!SymbolTable.addSymbol(functionId, new FunctionType((LiteralType)t))) {
+								parser.sem_error(functionId, "duplicate name");
+							} else {
+								if (paramsList != null) {
+									FunctionType type = (FunctionType)SymbolTable.getSymbol(functionId);
+									type.addParams((ArrayList<LiteralType>) paramsList);
+								}
+								SymbolTable.push();
+							}	
+					:} SEMICOLON declarations BEGIN statements END;
 
-params ::= params SEMICOLON param
-	| param
-	;
 
-param ::= identifiers COLON IDENTIFIER
-	| VARIABLE identifiers COLON IDENTIFIER
-	;
+opt_params		::= LEFT_PARENTHESIS params:paramsList RIGHT_PARENTHESIS {: RESULT = paramsList; :}
+				|	LEFT_PARENTHESIS RIGHT_PARENTHESIS
+				|	/* empty */;
 
-identifiers ::= identifiers COMMA IDENTIFIER
-	| IDENTIFIER
-	;
+params			::= params:paramsList SEMICOLON param:t {: ((ArrayList<LiteralType>)paramsList).addAll((ArrayList<LiteralType>)t); RESULT = paramsList; :}
+				|	param:paramsList {: RESULT = paramsList;  :};
 
-array ::= IDENTIFIER LEFT_BRACKET expressions RIGHT_BRACKET;
+param			::= identifiers:il COLON type:t {: 	mapTypes(il, null, t); 
 
-literal ::= BOOLEAN
-	| INTEGER
-	| STRING
-	;
+													List<LiteralType> paramsList = new ArrayList<LiteralType>();
+													for (int i = 0; i < ((ArrayList<String>)il).size(); i++) {
+														paramsList.add((LiteralType)t);
+													}
 
-statements ::= statements statement
-	| /* empty */
-	;
+													RESULT = paramsList; :}
+				|	VAR identifiers:il COLON type:t {: mapTypes(il, null, t); 
+													List<LiteralType> paramsList = new ArrayList<LiteralType>();
+													for (int i = 0; i < ((ArrayList<String>)il).size(); i++) {
+														paramsList.add((LiteralType)t);
+													}
 
-statement ::= attribuition
-	| call SEMICOLON
-	| for
-	;
+													RESULT = paramsList; :};
 
-call ::= IDENTIFIER LEFT_PARENTHESIS opt_arguments RIGHT_PARENTHESIS;
+identifiers		::= identifiers:il COMMA IDENTIFIER:id {: ((ArrayList<String>)il).add(((String)id).toLowerCase()); RESULT = il; :}
+				|	IDENTIFIER:id 	{:  List<String> il = new ArrayList<String>();
+   					 					il.add(((String)id).toLowerCase());
+   					 					RESULT = il; 
+									:};
 
-opt_arguments ::= arguments
-	| /* empty */
-	;
+array			::= IDENTIFIER LEFT_BRACKET expressions RIGHT_BRACKET;
 
-arguments ::= arguments COMMA expression
-	| expression
-	;
+literal			::= BOOLEAN {: LiteralType t = new LiteralType("boolean"); RESULT = t; :}
+				|	INTEGER {: LiteralType t = new LiteralType("integer"); RESULT = t; :}
+				|	STRING 	{: LiteralType t = new LiteralType("string"); RESULT = t; :};
 
-attribuition ::= IDENTIFIER ASSIGN expression SEMICOLON
-	| array ASSIGN expression SEMICOLON;
+statements		::= statements statement SEMICOLON
+				|	/* empty */;
 
-expressions ::= expressions COMMA expression
-	| expression
-	;
+statement		::= attribuition
+				|	call
+				|	for
+				;
 
-expression ::= exp0;
+call			::= IDENTIFIER:id LEFT_PARENTHESIS opt_arguments:typesList {:	LiteralType type = SymbolTable.getSymbol((String)id);
+																				List<LiteralType> tList = (ArrayList<LiteralType>)typesList;
+																				if (type == null) {
+																					parser.sem_error("Procedure or function not defined.");
+																				} else {
+																					if (type instanceof FunctionType) {
+																						FunctionType funcType = (FunctionType)type;
+																						if (tList == null && funcType.getParamsTypes().size() > 0)
+																							parser.sem_error("Function not defined.");
+																						else if (tList != null && funcType.getParamsTypes().size() == 0) {
+																							parser.sem_error("Function not defined.");
+																						} else {
+																							if (tList.size() != funcType.getParamsTypes().size()) parser.sem_error("Function not defined.");
+																							else {
+																								for(int i = 0; i < tList.size(); i++) {
+																									if (!tList.get(i).getName().equals(funcType.getParamsTypes().get(i).getName())) {
+																										parser.sem_error("Function not defined.");
+																										break;
+																									}
+																								}
+																							}																							
+																						}
+																						RESULT = funcType.getReturnType();
+																					} else if (type instanceof ProcedureType) {
+																						ProcedureType procType = (ProcedureType)type;
 
-exp0 ::= exp0 EQ exp1
-	| exp0 OR exp1
-	| exp0 AND exp1
-	| NOT exp1
-	| exp1
-	;
+																						if (tList == null && procType.getParamsTypes().size() > 0) {
+																							parser.sem_error("Procedure not defined.");
+																						} else if (tList != null && procType.getParamsTypes().size() == 0) {
+																							parser.sem_error("Procedure not defined.");
+																						} else {
+																							if (tList.size() != procType.getParamsTypes().size()) parser.sem_error("Function not defined.");
+																							else {
+																								for(int i = 0; i < tList.size(); i++) {
+																									if (!tList.get(i).getName().equals(procType.getParamsTypes().get(i).getName())) {
+																										parser.sem_error("Function not defined.");
+																										break;
+																									}
+																								}
+																							}																							
+																						}
+																						RESULT = procType.getName();
+																					}
+																				}																				
+
+																			:} RIGHT_PARENTHESIS;
+
+opt_arguments	::= arguments:typesList {: RESULT = typesList; :}
+				|	/* empty */;
+
+arguments		::= arguments:typesList COMMA expression:t {:	((ArrayList<LiteralType>)typesList).add((LiteralType)t);
+																RESULT = typesList;
+															:}
+				|	expression:t {:	List<LiteralType> typesList = new ArrayList<>(); 
+									typesList.add((LiteralType)t);
+									RESULT = typesList; :};
+
+attribuition	::= IDENTIFIER:id ASSIGN expression:t {: checkTypesAttr(id, t); 
+														 Values.setType(id, ((LiteralType)t).getName()); :}
+				|	array ASSIGN expression;
+
+expressions		::= expressions COMMA expression
+				|	expression;
+
+expression		::= exp0:t {: RESULT = t; :};
+
+exp0			::=	exp0 EQ exp1 {: RESULT = new LiteralType("boolean"); :}
+				|	exp0 OR exp1 {: RESULT = new LiteralType("boolean"); :}
+				|	exp0 AND exp1 {: RESULT = new LiteralType("boolean"); :}
+				|	NOT exp1 {: RESULT = new LiteralType("boolean"); :}
+				|	exp1:t  {: RESULT = t; :};
 	
-exp1 ::= exp1 ADD exp2
-	| exp1 SUB exp2
-	| exp2
-	;
+exp1			::= exp1:t1 ADD exp2:t2 {: RESULT = sintArType(t1, t2); :}
+				|	exp1:t1 SUB exp2:t2 {: RESULT = sintArType(t1, t2); :}
+				|	exp2:t {: RESULT = t; :};
 	
-exp2 ::= exp2 MUL exp3
-	| exp2 DIV exp3
-	| exp2 MOD exp3
-	| exp3
-	;
+exp2			::= exp2:t1 MUL exp3:t2 {: RESULT = sintArType(t1, t2); :}
+				|	exp2:t1 DIV exp3:t2 {: RESULT = sintArType(t1, t2); :}
+				|	exp2:t1 MOD exp3:t2 {: RESULT = sintArType(t1, t2); :}
+				|	exp3:t {: RESULT = t; :};
 	
-exp3 ::= ADD exp3
-	| SUB exp3
-	| exp4
-	;
+exp3			::= ADD exp3:t {: RESULT = t; :}
+				|	SUB exp3:t {: RESULT = t; :}
+				|	exp4:t {: RESULT = t; :};
 	
-exp4 ::= IDENTIFIER
-	| LEFT_PARENTHESIS exp0 RIGHT_PARENTHESIS
-	| literal
-	| call
-	| array
-	;
+exp4			::= IDENTIFIER:id {: RESULT = new LiteralType(Values.getType(id)); :}
+				|	LEFT_PARENTHESIS exp0:t RIGHT_PARENTHESIS {: RESULT = t; :}
+				|	literal:t {: RESULT = t; :}
+				|	call:t {: RESULT = t; :}
+				|	array:t {: RESULT = t; :};
 
-for ::= FOR IDENTIFIER ASSIGN literal TO literal DO BEGIN statements END SEMICOLON
-	|   FOR IDENTIFIER ASSIGN IDENTIFIER TO literal DO BEGIN statements END SEMICOLON
-	|	FOR IDENTIFIER ASSIGN IDENTIFIER TO IDENTIFIER DO BEGIN statements END SEMICOLON
-	;
+for ::= FOR IDENTIFIER ASSIGN literal TO literal DO BEGIN statements END
+		|   FOR IDENTIFIER ASSIGN IDENTIFIER TO literal DO BEGIN statements END
+		|	FOR IDENTIFIER ASSIGN literal TO IDENTIFIER DO BEGIN statements END
+		|	FOR IDENTIFIER ASSIGN IDENTIFIER TO IDENTIFIER DO BEGIN statements END
+		;
 	
